@@ -140,23 +140,25 @@ Design, trade-offs and full test records: [spec](docs/features/2026-10-01-jev-ta
 
 ## Field test
 
-A 10-step flow on the Flutter app "FindRestaurant" on a Pixel 9a emulator (Android 17): terminate all apps → tap the app on the launcher → wait for load → scroll 100 px → open side menu → "關鍵字過濾" → "取消" → open side menu → "我的位置" → wait for reload. Budget 300 s per run, at most 2 retries per step. Five runs per server, each run in a fresh Claude Code subagent (Opus 5.5) so context does not accumulate across runs.
+A 10-step flow on the Flutter app "FindRestaurant" on a Pixel 9a emulator (Android 17): terminate all apps → tap the app on the launcher → wait for load → scroll 100 px → open side menu → "關鍵字過濾" → "取消" → open side menu → "我的位置" → wait for reload. Budget 300 s per run, at most 2 retries per step. Five runs per server and per model, each run in a fresh Claude Code subagent (Opus 5.5, or Haiku 5.5 for the Haiku column) so context does not accumulate across runs.
 
-| | upstream mobile-mcp 1.0.8 ³ | jev-mobile-mcp |
-|---|---:|---:|
-| Passed | 5 / 5 | 5 / 5 |
-| Avg time | 137.2 s | 70.0 s (−49%) |
-| Avg model requests per run (Claude API) ² | 23.6 | 16 (−32%) |
-| Avg input-equivalent tokens per run ¹ | 295.3k | 166.3k (−44%) |
-| Steady state, runs 3–5 ¹ | 202k–336k | 141k–152k |
-| Avg output tokens per run | 1,575 | 517 (−67%) |
-| Retries, all runs | 2 (launcher tap, dialog "取消") | 0 |
+| | upstream mobile-mcp 1.0.8 ³ | jev-mobile-mcp (Opus 5.5) | jev-mobile-mcp (Haiku 5.5) ⁴ |
+|---|---:|---:|---:|
+| Passed | 5 / 5 | 5 / 5 | 3 / 5 |
+| Avg time | 137.2 s | 70.0 s (−49%) | 180.0 s (+31%) |
+| Avg model requests per run (Claude API) ² | 23.6 | 16 (−32%) | 24.6 (+4%) |
+| Avg input-equivalent tokens per run ¹ | 295.3k | 166.3k (−44%) | 270.2k (−8%) |
+| Steady state, runs 3–5 ¹ | 202k–336k | 141k–152k | 244k–372k |
+| Avg output tokens per run | 1,575 | 517 (−67%) | 596 (−62%) |
+| Retries, all runs | 2 (launcher tap, dialog "取消") | 0 | 8 |
 
 ¹ From the `usage` of every model request in the subagent transcript, priced relative to plain input: cache read × 0.1 + cache write × 1.25 + input. Raw totals are much larger (1.2–2.6 M tokens per run) because every request resends the whole context, about 63k of which is fixed overhead (system prompt, tool definitions, project rules) before the first step. Runs that write that context to the cache (run 1 of each server, and upstream run 4) are higher.
 
 ² One request to the Claude Messages API, i.e. one model turn; counted as distinct assistant messages in the transcript. Not the number of MCP tool calls or device actions: one request can issue several tool calls, and one `mobile_batch_commands` can run many device steps.
 
-³ Upstream 1.0.8, installed as the Claude Code plugin (`/plugin install mobile-mcp@mobile-mcp`), run on 2026-10-03. The jev-mobile-mcp column was measured earlier and not rerun.
+³ Upstream 1.0.8, installed as the Claude Code plugin (`/plugin install mobile-mcp@mobile-mcp`), run on 2026-10-03. The jev-mobile-mcp (Opus 5.5) column was measured earlier and not rerun.
+
+⁴ jev-mobile-mcp with Haiku 5.5 as the subagent model, run on 2026-10-08 with the same prompt and method. The five runs were executed one after another on Pixel_9a. Runs 2 and 4 failed partway (step 5 and step 4), so their times are partial and their figures are included only so the average covers all five runs. Run 4 was marked FAIL for the step 4 scroll distance, but runs 1, 3 and 5 had the same kind of error (a 100 px swipe moved the list about 300–375 px) and were marked PASS, so the pass count depends on that judgment.
 
 - **Where the saving comes from**: the four text targets ("FindRestaurant", "關鍵字過濾", "取消", "我的位置") were each tapped by one `mobile_tap` (OCR, confidence 0.91–0.99), with no screenshot to locate them first. Fewer model requests means fewer resends of the context, which dominates the cost.
 - **Why upstream took longer**: on this Flutter screen `mobile_list_elements_on_screen` usually did not show the open side menu, so the agent took screenshots and tapped coordinates read off them; screenshots often still showed the previous screen and had to be taken again. Every run also listed the 22–25 installed apps and terminated each one, since there is no tool for listing running apps.
@@ -188,6 +190,32 @@ jev-mobile-mcp:
 | 5 | 64 s | 16 | 1,243,856 | 21,952 | 494 | 151.9k | 0 |
 
 Plain input was 30–56 tokens per run and is left out.
+
+Haiku 5.5 ⁴:
+
+| Run | Result | Time | Model requests | Cache read | Cache write | Output | Input-equivalent ¹ | Retries |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| 1 | PASS | 168 s | 21 | 1,690,977 | 96,790 | 331 | 290.1k | 2 (step 5 by ref after a 0.44-confidence tap; step 7 stale ref, re-listed) |
+| 2 | FAIL at step 5 | 142 s | 15 | 1,177,541 | 28,342 | 678 | 153.2k | 2 (step 5: tap and ref click did not open the drawer; coordinate retry also failed) |
+| 3 | PASS | 197 s | 24 | 2,027,316 | 32,539 | 382 | 243.5k | 0 (step 5 drawer not in element list, confirmed by screenshot) |
+| 4 | FAIL at step 4 | 225 s | 35 | 3,163,450 | 44,589 | 623 | 372.2k | 3 (step 4: 100 px swipe moved ~342 px, then two corrective swipes; step 5: stale ref, coordinate tap worked) |
+| 5 | PASS | 168 s | 28 | 2,439,725 | 38,203 | 966 | 291.8k | 1 (step 2: grid icon tap missed, hotseat icon worked) |
+
+Haiku notes:
+
+- **Step 4 swipe**: the swipe tool did not honor the 100 px distance in any Haiku run (about 300–375 px). The single Opus 5.5 spot check above showed the same, so the "scroll 100 px" step is approximate for both.
+- **Step 2 launch**: the launcher grid icon tap failed in run 5 and the hotseat icon worked.
+- **Stale refs**: refs from an earlier listing went stale after the screen changed (runs 1 and 4) and were not reused.
+
+#### Re-run on 2026-10-08 (jev-mobile-mcp, single run)
+
+All 10 steps passed on the same Pixel 9a emulator, run directly in the main session rather than a subagent, so no `usage` data was captured. Token and request figures are therefore not comparable and are left out; the upstream column was not rerun.
+
+- **Time**: not timed precisely. The device clock read 9:08 when the app's first screen appeared and 9:10 at the end, so the run fit well within the 300 s budget.
+- **Retries (3, all within the 2-per-step limit)**:
+  - Launcher tap (`mobile_tap`, step 2): TypeSafe returned HTTP 529, then a timeout, both with nothing tapped; the third attempt matched the icon label by OCR (confidence 0.60).
+  - Hamburger button (step 5): the first tap by coordinates did not open the drawer; the tap by ref (`@e72`) did.
+- **Load wait (step 10)**: after "我的位置" the list showed skeleton placeholders for about 30 s while a network request completed.
 
 ### Why reading the screen is slow on Flutter debug builds
 
